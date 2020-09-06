@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CompilerConfiguration">
+    <annotationProcessing>
+      <profile name="Maven default annotation processors profile" enabled="true">
+        <sourceOutputDir name="target/generated-sources/annotations" />
+        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
+        <module name="zuul-one" />
+        <module name="zuuls-one" />
+        <module name="zuul-two" />
+        <module name="zuuls-two" />
+        <module name="user-service" />
+        <module name="registorys" />
+      </profile>
+    </annotationProcessing>
+    <bytecodeTargetLevel>
+      <module name="user-services" target="1.8" />
+      <module name="zuul-one" target="1.8" />
+      <module name="zuuls-two" target="1.8" />
+    </bytecodeTargetLevel>
+  </component>
+  <component name="JavacSettings">
+    <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="getway" options="-parameters" />
+      <module name="registorys" options="-parameters" />
+      <module name="user-service" options="-parameters" />
+      <module name="user-services" options="-parameters" />
+      <module name="zuul-one" options="-parameters" />
+      <module name="zuul-two" options="-parameters" />
+      <module name="zuuls-one" options="-parameters" />
+      <module name="zuuls-two" options="-parameters" />
+    </option>
+  </component>
+</project>
