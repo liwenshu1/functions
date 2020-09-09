@@ -1,0 +1,587 @@
+# 螺丝帽账号注册短信验证
+
+1. 我们注册账号的时候需要短信验证 点击获取验证码 发送请求到后台，我们把验证码和手机号放到队列里 ，然后取出来通过螺丝帽的工具类发到用户手机上（我们可以这样想点击，获取验证码是生产者，螺丝帽是消费者），获取到的验证码和手机号放到redis里，我们的验证码一般都有时间段的，到了一定的时间段这个验证码就会失效 ，redis里有个方法可以设置失效时间，所以我们把验证码放到redis里
+
+   
+
+   ## 1.1前台页面
+
+   ![image-20200908113417060](assets\image-20200908113417060.png)
+
+   ![image-20200908113553764](assets\image-20200908113553764.png)
+
+   ##### 在注册页面找到，获取验证码按钮通过点击事件触发请求到后台
+
+   
+
+   
+
+   ## 1.2后台
+
+   ###   1.2.1创建module
+
+   在b2c下创建一个模块
+
+   ![image-20200908142504672](assets\image-20200908142504672.png)
+
+   ​	![image-20200908142527866](assets\image-20200908142527866.png)
+
+   #### 1.2.2:pom
+
+   ```
+   <?xml version="1.0" encoding="UTF-8"?>
+   <project xmlns="http://maven.apache.org/POM/4.0.0"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+       <parent>
+           <artifactId>b2c</artifactId>
+           <groupId>com.mr</groupId>
+           <version>1.0.0-SNAPSHOT</version>
+       </parent>
+       <modelVersion>4.0.0</modelVersion>
+   
+       <groupId>com.mr</groupId>
+       <artifactId>b2c-sms</artifactId>
+   
+       <dependencies>
+           <dependency>
+               <groupId>org.springframework.boot</groupId>
+               <artifactId>spring-boot-starter-web</artifactId>
+           </dependency>
+           <dependency>
+               <groupId>org.springframework.boot</groupId>
+               <artifactId>spring-boot-starter-amqp</artifactId>
+           </dependency>
+           <dependency>
+               <groupId>com.aliyun</groupId>
+               <artifactId>aliyun-java-sdk-core</artifactId>
+               <version>3.3.1</version>
+           </dependency>
+           <dependency>
+               <groupId>com.aliyun</groupId>
+               <artifactId>aliyun-java-sdk-dysmsapi</artifactId>
+               <version>1.0.0</version>
+           </dependency>
+   
+           <!-- https://mvnrepository.com/artifact/com.sun.jersey/jersey-bundle -->
+           <dependency>
+               <groupId>com.sun.jersey</groupId>
+               <artifactId>jersey-bundle</artifactId>
+               <version>1.19.4</version>
+           </dependency>
+   
+           <!-- https://mvnrepository.com/artifact/org.json/json -->
+           <dependency>
+               <groupId>org.json</groupId>
+               <artifactId>json</artifactId>
+               <version>20200518</version>
+           </dependency>
+   
+           <dependency>
+               <groupId>org.springframework.boot</groupId>
+               <artifactId>spring-boot-starter-data-redis</artifactId>
+           </dependency>
+   
+           <!-- junit -->
+           <dependency>
+               <groupId>org.springframework.boot</groupId>
+               <artifactId>spring-boot-starter-test</artifactId>
+               <scope>test</scope>
+           </dependency>
+       </dependencies>
+   </project>
+   ```
+
+   
+
+   #### 1.2.3.编写启动类
+
+   ```
+   @SpringBootApplication
+   public class SmsApplication {
+       public static void main(String[] args) {
+           SpringApplication.run(SmsApplication.class, args);
+       }
+   }
+   ```
+
+   #### 1.2.4.编写application.yml
+
+   ```
+   server:
+     port: 8086
+   spring:
+     application:
+       name: sms-service
+     rabbitmq:
+       host: 192.168.80.131
+       username: b2c
+       password: b2c
+       virtual-host: b2c
+       template:
+         retry:
+           enabled: true
+           initial-interval: 10000ms
+           max-interval: 210000ms
+           multiplier: 2
+         publisher-confirms: true
+     redis:
+       host: 192.168.80.130
+   ```
+
+   #### 1.2.5.编写消息监听器
+
+   ```
+   package com.mr.mq;
+   
+   import com.mr.service.SmsService;
+   import org.apache.commons.lang3.StringUtils;
+   import org.springframework.amqp.rabbit.annotation.Exchange;
+   import org.springframework.amqp.rabbit.annotation.Queue;
+   import org.springframework.amqp.rabbit.annotation.QueueBinding;
+   import org.springframework.amqp.rabbit.annotation.RabbitListener;
+   import org.springframework.beans.factory.annotation.Autowired;
+   import org.springframework.stereotype.Component;
+   
+   import java.util.Map;
+   
+   @Component
+   public class SmsListener {
+   
+       @Autowired
+      private SmsService smsService;
+   
+       @RabbitListener(bindings = @QueueBinding(
+               value = @Queue(value = "b2c.sms.queue", durable = "true"),
+               exchange = @Exchange(value = "b2c.sms.exchange",
+                       ignoreDeclarationExceptions = "true"),
+               key = {"sms.verify.code"}))
+       public void listenSms(Map<String, String> msg) throws Exception {
+           if (msg == null || msg.size() <= 0) {
+               // 放弃处理
+               return;
+           }
+           String phone = msg.get("phone");
+           String code = msg.get("code");
+   
+           if (StringUtils.isBlank(phone) || StringUtils.isBlank(code)) {
+               // 放弃处理
+               return;
+           }
+            // 发送短信
+           smsService.sms(code,phone);
+       }
+   }
+   ```
+
+   
+
+   #### 创建serivce
+
+   ```
+   package com.mr.service;
+   
+   import com.mr.utils.LuosimaoDuanxinUtil;
+   import org.springframework.beans.factory.annotation.Autowired;
+   import org.springframework.stereotype.Service;
+   
+   /**
+    * @ClassName SmsService
+    * @Description: TODO
+    * @Author shenyaqi
+    * @Date 2020/9/7
+    * @Version V1.0
+    **/
+   @Service
+   public class SmsService {
+   
+       @Autowired
+       private LuosimaoDuanxinUtil luosimaoDuanxinUtil;
+   
+       public String sms(String code, String phone) {
+   		//调用螺丝帽工具列 发送手机短信
+          return luosimaoDuanxinUtil.SendCode(phone,code);
+       }
+   }
+   ```
+
+   #### 1.2.6.螺丝帽工具类
+
+   ```
+   package com.mr.utils;
+   
+   import com.sun.jersey.api.client.Client;
+   import com.sun.jersey.api.client.ClientResponse;
+   import com.sun.jersey.api.client.WebResource;
+   import com.sun.jersey.api.client.filter.HTTPBasicAuthFilter;
+   import com.sun.jersey.core.util.MultivaluedMapImpl;
+   import org.slf4j.Logger;
+   import org.slf4j.LoggerFactory;
+   import org.springframework.stereotype.Service;
+   
+   import javax.ws.rs.core.MediaType;
+   
+   /**
+    * @ClassName LuosimaoDuanxinUtil
+    * @Description: TODO
+    * @Author shenyaqi
+    * @Date 2019/12/25
+    * @Version V1.0
+    **/
+   @Service
+   public class LuosimaoDuanxinUtil {
+   
+       static Logger logger =  LoggerFactory.getLogger(LuosimaoDuanxinUtil.class);
+   
+       //短信平台的APIkey
+       private static final String DUANXIN_API_KEY = "4838019b661b508a4220534aeec786c2";//需要使用自己的APIkey
+       private static final String SPEAK_API_KEY = "4838019b661b508a4220534aeec786c2";//需要使用自己的APIkey
+       private static final String SEND_DUANXIN_URL = "http://sms-api.luosimao.com/v1/send.json";//发送短信的接口
+       private static final String SEND_SPEAK_URL = "http://voice-api.luosimao.com/v1/verify.json";//发送语音的接口
+       private static final String STATUS_URL = "http://sms-api.luosimao.com/v1/status.json";//查看余额的接口
+   
+       /**
+        * 发送短信
+        * @param phone
+        * @param code
+        * @return
+        */
+       public static String SendCode(String phone,String code){
+           // just replace key here
+           Client client = Client.create();
+           client.addFilter(new HTTPBasicAuthFilter(
+                   "api",DUANXIN_API_KEY));
+           WebResource webResource = client.resource(SEND_DUANXIN_URL);
+           MultivaluedMapImpl formData = new MultivaluedMapImpl();
+           formData.add("mobile", phone);
+           formData.add("message", "验证码：" + code + "【铁壳测试】");//注意此处不能修改
+           ClientResponse response =  webResource.type(String.valueOf(MediaType.APPLICATION_FORM_URLENCODED)).
+                   post(ClientResponse.class, formData);
+           String textEntity = response.getEntity(String.class);
+           int status = response.getStatus();
+           logger.info(textEntity);
+           logger.info("---------发送短信验证状态------" + status);
+           return textEntity;
+       }
+   
+       public static String sendSpeak(String phone,String code){
+           // just replace key here
+           Client client = Client.create();
+           client.addFilter(new HTTPBasicAuthFilter(
+                   "api",SPEAK_API_KEY));
+           WebResource webResource = client.resource(
+                   SEND_SPEAK_URL);
+           MultivaluedMapImpl formData = new MultivaluedMapImpl();
+           formData.add("mobile", phone);
+           formData.add("code", code);
+           ClientResponse response =  webResource.type( MediaType.APPLICATION_FORM_URLENCODED ).
+                   post(ClientResponse.class, formData);
+           String textEntity = response.getEntity(String.class);
+           int status = response.getStatus();
+           logger.info(textEntity);
+           logger.info("---------发送语音验证状态------" + status);
+   
+           return textEntity;
+       }
+   
+       /**
+        * 查看余额
+        * @return
+        */
+       private static String getStatus(){
+           Client client = Client.create();
+           client.addFilter(new HTTPBasicAuthFilter(
+                   "api",DUANXIN_API_KEY));
+           WebResource webResource = client.resource( STATUS_URL );
+           MultivaluedMapImpl formData = new MultivaluedMapImpl();
+           ClientResponse response =  webResource.get( ClientResponse.class );
+           String textEntity = response.getEntity(String.class);
+           int status = response.getStatus();
+   
+           logger.info(textEntity);
+           logger.info(status + "");
+           return textEntity;
+       }
+   }
+   ```
+
+   在网关添加
+
+   ![image-20200908145908552](assets\image-20200908145908552.png)
+
+   
+
+   #### 1.2.7.启动项目
+
+   然后查看RabbitMQ控制台，发现交换机已经创建
+
+   ![image-20200908144108632](assets\image-20200908144108632.png)
+
+   队列也创建出来了
+
+   ![image-20200908144420707](assets\image-20200908144420707.png)
+
+   并且绑定：
+
+   ![image-20200908144539585](assets\image-20200908144539585.png)
+
+   
+
+   
+
+   
+
+   
+
+### 
+
+## 2.1.controller
+
+我们在b2c-user模块里写代码因为前台发的请求是
+
+![image-20200908145359466](assets\image-20200908145359466.png)
+
+
+
+在网关的application.yml里的白名单里加上，不加的话会拦截请求
+
+![image-20200908115756573](assets\image-20200908115756573.png)
+
+### 2.1.1.application.yml
+
+application.yml
+
+```
+  redis:
+    host: 192.168.80.130
+  rabbitmq:
+    host: 192.168.80.131
+    username: b2c
+    password: b2c
+    virtual-host: b2c
+    template:
+      retry:
+        enabled: true
+        initial-interval: 10000ms
+        max-interval: 210000ms
+        multiplier: 2
+      publisher-confirms: true
+```
+
+
+
+
+
+### 2.1.2pom
+
+```
+//redis
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+//mq
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-amqp</artifactId>
+</dependency>
+
+```
+
+另外还要用到工具类，生成6位随机码，这个我们封装到了`leyou-common`中，因此需要引入依赖：
+
+<!--引入工具类-->
+<dependency>
+    <groupId>com.mr.common</groupId>
+    <artifactId>b2c-common</artifactId>
+    <version>${b2c.latest.version}</version>
+</dependency>
+
+#### 2.2.3工具类
+
+```
+/**
+ * 生成指定位数的随机数字
+ * @param len
+ * @return
+ */
+public static String generateCode(int len){
+    len = Math.min(len, 8);
+    int min = Double.valueOf(Math.pow(10, len - 1)).intValue();
+    int num = new Random().nextInt(Double.valueOf(Math.pow(10, len + 1)).intValue() - 1) + min;
+    return String.valueOf(num).substring(0,len);
+}
+```
+
+![image-20200908151913316](assets\image-20200908151913316.png)
+
+#### 2.2.4.controller
+
+```
+//短信验证
+@PostMapping("send")
+public ResponseEntity<Void> sendVerifyCode(@RequestParam("phone") String phone){
+    //状态码400
+    if(phone==null){
+        return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
+    }
+
+    try {
+        Boolean boo = service.sendVerifyCode(phone);
+        //状态码200
+        return new ResponseEntity<>(HttpStatus.OK);
+    }catch (Exception e){
+        //状态码500
+        return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+}
+```
+
+#### 2.2.5.service
+
+```
+    //redis
+    @Autowired
+    private StringRedisTemplate redisTemplate;
+	
+	//mq
+    @Autowired
+    private AmqpTemplate amqpTemplate;
+
+	static final Logger logger = LoggerFactory.getLogger(UserService.class);
+public Boolean sendVerifyCode(String phone) {
+    // 生成验证码
+    String code = NumberUtils.generateCode(6);
+
+    try {
+        // 发送短信
+        Map<String,String> msg = new HashMap<>();
+        msg.put("phone",phone);
+        msg.put("code",code);
+        System.out.println(msg);
+        //把手机号，验证码放到队列里
+        amqpTemplate.convertAndSend("b2c.sms.exchange","sms.verify.code",msg);
+        // 将code存入redis 设置实现时间
+        redisTemplate.opsForValue().set(KEY_PREFIX + phone, code, 5, TimeUnit.MINUTES);
+        return true;
+    }catch (Exception e){
+        logger.error("发送短信失败。phone：{}， code：{}", phone, code);
+        return false;
+    }
+}
+```
+
+我们定义个map，把数据放到map里，然后把map放到的数据放到队列里和reids里
+
+
+
+#### 2.2.6.队列
+
+我们可以看队列里是否有数据
+
+![image-20200908152959274](assets\image-20200908152959274.png)
+
+这个时候我们队列有信息了
+
+我们把队列里的数据取出来调用螺丝帽工具类发送手机短信
+
+![image-20200908161642445](assets\image-20200908161642445.png)
+
+![image-20200908161716955](assets\image-20200908161716955.png)
+
+在看一下缓存里是否有数据
+
+![image-20200908153433105](assets\image-20200908153433105.png)
+
+查看短信
+
+![image-20200908153530546](assets\image-20200908153530546.png)
+
+
+
+# 3.1短信校验
+
+我们先想一想点击完成注册是不是你输入的验证码是不是可以传到后台
+
+我们看一下前台代码
+
+![image-20200908154136371](assets\image-20200908154136371.png)
+
+![image-20200908154158989](assets\image-20200908154158989.png)
+
+![image-20200908160959338](assets\image-20200908160959338.png)
+
+结果我们看了一下表单上的数据都可以传到后台 这样的话我们在注册的时候在service里判断一下是否与reids里的
+
+验证码一样一样的话注册成功，不一样的话注册失败
+
+### 3.1.1User实体类
+
+![image-20200908154724579](assets\image-20200908154724579.png)
+
+我们在user实体类里加一个字段，数据库没有这个字段，我们有不能在数据库里加这个字段，为什么不能加呢
+
+我们可以这样想一想验证码都是有时间规定的，我们加到数据库的话相当于这个验证码一直可以用，这个不符合场景，所以我们在实体类里加一个字段 用@Transient注解 （某个字段加@Transient，这个字段不会存储到数据库）
+
+### 3.1.2.controller
+
+```
+/**
+ * 注册用户
+ * @param user
+ * @return
+ */
+@PostMapping("register")
+public ResponseEntity register(User user){
+    Boolean result=  service.register(user);
+    System.out.println(user);
+    //注册失败，返回400请求
+    if(!result){
+        return  new ResponseEntity(HttpStatus.BAD_REQUEST);//400
+    }
+    return new ResponseEntity(HttpStatus.CREATED);//201 注册成功
+}
+```
+
+### 3.1.3.service
+
+```
+public Boolean register(User user) {r
+	//获取redis key值
+    String key = KEY_PREFIX + user.getPhone();
+    //通过key获取验证码
+    String code = this.redisTemplate.opsForValue().get(key);
+    if (user == null) {
+        return false;
+    }
+    if (user.getCode().equals(code)) {
+        //设置注册时间
+        user.setCreated(new Date());
+        //设置uuid为盐
+        user.setSalt(Md5Utils.generateSalt());
+        //将原始密码进行加密,配合盐再次加密,防止破解
+        user.setPassword(Md5Utils.md5Hex(user.getPassword(),
+                user.getSalt()));
+        //如果返回结果1为成功,0为失败
+        return userMapper.insertSelective(user) == 1;
+    }
+    return false;
+}
+```
+
+我们现在redis里有数据，我们从reids里查出来的验证码，跟前台传过来的验证码 做比较如果相等注册成功，
+
+不相等返回false，注册失败
+
+
+
+
+
+
+
+
+
+
+
+
+
